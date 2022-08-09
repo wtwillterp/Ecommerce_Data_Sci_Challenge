@@ -1,0 +1,325 @@
+---
+title: "IXIS Data Science Challenge"
+author: "William Terpstra"
+date: "2022-08-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(openxlsx)
+#maybe remove since it isn't explicitly mentioned in the guidance
+library(GGally)
+library(gridExtra)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Data_Loading}
+#set working directory & load data
+setwd("C:/Users/Will/Documents/IXIS_Test")
+#loading data
+adds_df <- read.csv("DataAnalyst_Ecom_data_addsToCart.csv")
+session_df <- read.csv("DataAnalyst_Ecom_data_sessionCounts.csv")
+```
+
+```{r Data_Cleaning}
+#first lets verify data types
+str(adds_df)
+str(session_df)
+#adds_df seems fine, could convert the dates into a date object
+#but doesn't seem necessary
+
+#session_df on the other hand requires some conversions, again I could convert
+#the dates into a date object but I'll actually do the separate() approach
+session_df <- session_df %>% 
+  #separating the date column into month, date, and year
+  separate(dim_date, c("month","day","year"), "/", convert = TRUE)
+#while we are at it, lets rename QTY to follow the naming convetions of other vairables
+session_df <- session_df %>% rename(quantity = QTY)
+#next dim_browser and dim_deviceCategory should be factors
+session_df$dim_browser <- as.factor(session_df$dim_browser)
+session_df$dim_deviceCategory <- as.factor(session_df$dim_deviceCategory)
+#okay data types are all addressed except dim_browser is a factor with
+#57 levels, it makes sense to condense that
+
+#but first lets perform de-duplication since duplicates could influence
+#browser frequency
+setdiff(session_df %>% distinct(), session_df)
+#it seems there are no duplicates so we are good to proceed
+
+#now it is time to finish addressing data type issues
+#looking at counts and deciles of browser frequency to determine a cut off
+session_df %>% count(dim_browser) %>% arrange(desc(n)) %>% mutate(decile = ntile(n, 10))
+#lets just do a cut off at the top 25 browsers, and lump the rest into other
+session_df$dim_browser <- fct_lump_n(session_df$dim_browser, 25)
+#verifying it worked
+session_df%>% count(dim_browser) %>% arrange(desc(n))
+
+#creating a function to check for NAs
+NAcheck <- function(df) {
+  names <- c()
+  percent_of_missing_values <- c()
+  for(i in 1:ncol(df)) { # for-loop over columns in the data frame
+    
+    #adding the name of each column to a vector
+    names <- append(names, colnames(df[i]))
+    #adding the amount of missing values of each column to a vector
+    percent_of_missing_values <- append(percent_of_missing_values, sum(is.na(df[,i]))/nrow(df))
+  }
+  #using the two vectors to output a data frame 
+  #with the names of columns and their amount of missing values
+  data.frame(names, percent_of_missing_values)
+}
+
+#checking for missing values
+NAcheck(adds_df)
+NAcheck(session_df)
+#seems there are no missing values
+
+#next lets verify the dates span a 12 month period
+#and there isn't any odd overlap we would have to take into account
+session_df %>%
+  select(month, year) %>%
+  distinct() %>%
+  arrange(month)
+#seems the date range of the sent data is correct
+
+#next lets check for anomalous values/outliers
+#adds_df is so small I manually reviewed it for errors
+#but to be diligent lets make a quick and dirty box plot
+boxplot(adds_df$addsToCart,
+        main = "addsToCart Outlier Check",
+        ylab = "addsToCart", 
+        col = "tomato")
+#the data seems plausible with no egregious outliers
+
+#now sessions_df is much larger and must be assessed through code and visualizations
+#lets start by looking at daily data
+daily_s_df <- session_df %>%
+  #grouping by day and month so we can summarize each statistic by day
+  group_by(month, day) %>%
+  #removing year
+  dplyr::select(-c(year)) %>%
+  #summarizing the daily average and standard deviation for each statistic
+  summarise_if(is.numeric, list(total = sum)) %>%
+  #calculating ECR to look at that as well
+  mutate(ECR_total = transactions_total/sessions_total) %>%
+  mutate(qty_per_trans_total = quantity_total/transactions_total)
+#un-grouping data
+daily_s_df <- daily_s_df %>% ungroup
+
+#looking at univariate distributions to assess for anomalies
+ggplot(gather(daily_s_df %>%
+                #since we are looking at data summarized by day and month
+                #it doesn't make sense to look at these variables
+                dplyr::select(-c(day, month)) %>%
+                dplyr::select(where(is.numeric))),
+       aes(value)) + 
+    geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.9, bins = 20) + 
+    facet_wrap(~key, scales = 'free') +
+    labs(title = "Session Counts Univariate Distributions")
+#there is a slight chance for an outlier in sessions avg per day
+#and a significant chance for an outlier in transactions avg per day
+#maybe something went viral, or there was a sale, let's investigate
+
+#seems Jan 12th and June 8th are the odd ones out
+daily_s_df %>% arrange(desc(transactions_total))
+#it is quite odd that they are one off days
+#sessions are at the high end of their distribution these days
+#but more significantly it corresponds with a max for Quantity
+#which may seem obvious but this led me to discover there can be transactions
+#with a corresponding quantity of zero, indicating maybe transactions are recorded
+#before a purchase is finalized, this may be something that should be addressed
+#in terms of improving data collection or leveraged with additional data assets
+#to discover why prospective customers start but do not complete transactions
+
+daily_s_df %>% arrange(desc(qty_per_trans_total))
+
+summary(daily_s_df)
+
+ggplot(daily_s_df, aes(x = transactions_total, y = quantity_total)) +
+  geom_point(size=2, shape=1)
+
+device_month_df <- session_df %>%
+  #grouping by device and month so we can summarize each statistic
+  group_by(dim_deviceCategory, month) %>%
+  #removing year and day
+  dplyr::select(-c(year, day)) %>%
+  #summarizing the daily average and standard deviation for each statistic
+  summarise_if(is.numeric, list(total = sum)) %>%
+  #calculating ECR to look at that as well
+  mutate(ECR_total = transactions_total/sessions_total) %>%
+  mutate(qty_per_trans_total = quantity_total/transactions_total) %>%
+  ungroup()
+
+device_month_df %>% ggpairs(aes(colour = dim_deviceCategory, alpha = 0.4))
+```
+
+
+```{r Data_Aggregation_by_Device}
+device_ag_df <- session_df %>% 
+  #using the group_by() and summarize() functions to calculate the totals of 
+  #numeric variables by device category and month
+  #I also include year for clarity about the past 12 month period being analyzed
+  group_by(dim_deviceCategory, month, year) %>%
+  summarise_if(is.numeric, sum) %>%
+  #adding a column for the effective conversion rate
+  mutate(ECR = transactions/sessions) %>%
+  #mutating year just for clarification
+  mutate(year = year + 2000) %>%
+  dplyr::select(-c(day))
+#ungrouping
+device_ag_df <- device_ag_df %>% ungroup()
+
+#arranging the data for intuitive display
+device_ag_df <- device_ag_df %>% arrange(dim_deviceCategory, year, month)
+#seems this part of the deliverable displays correctly
+device_ag_df
+
+device_ag_df %>% group_by(dim_deviceCategory) %>% 
+  dplyr::select(-c(month, year)) %>%
+  summarize_if(is.numeric, list(monthly_avg = mean)) %>%
+  mutate(prc_ses_m_avg = sessions_monthly_avg/sum(sessions_monthly_avg)) %>%
+  mutate(dim_deviceCategory = str_to_title(dim_deviceCategory)) %>%
+  ggplot(aes(reorder(dim_deviceCategory, prc_ses_m_avg),
+             prc_ses_m_avg, fill=dim_deviceCategory)) +
+  geom_col(show.legend = FALSE) +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1)) +
+  scale_fill_manual(values = c("Desktop" = "#F8766D",
+                               "Mobile"="#7CAE00",
+                               "Tablet"="#00BFC4",
+                               "Total"="#C77CFF")) +
+  coord_flip() +
+  geom_text(size = 5,
+            aes(label = scales::percent(round(prc_ses_m_avg, 3)),
+                y = prc_ses_m_avg),
+            hjust = -.1) +
+  labs(title = "Share of Sessions by Device", 
+       x = "Device", 
+       y = "Sessions")
+```
+```{r Data_Aggregation_by_month}
+#creating the second deliverable
+
+month_ag_df <- session_df %>% 
+  #using the group_by() and summarize() functions to calculate the totals of 
+  #numeric variables by device category and month
+  #I also include year for clarity about the past 12 month period being analyzed
+  group_by(year, month) %>%
+  dplyr::select(-c(day)) %>%
+  summarise_if(is.numeric, sum) %>%
+  #adding a column for the effective conversion rate
+  mutate(ECR = transactions/sessions) %>%
+  #mutating year just for clarification
+  mutate(year = year + 2000)
+#ungrouping
+month_ag_df <- month_ag_df %>% ungroup()
+
+#now adding addsToCart and ATCR
+month_ag_df <- month_ag_df %>%
+  left_join(adds_df %>% dplyr::select(-c(dim_year)), by = c("month" = "dim_month")) %>%
+  #calculating ATCR
+  #small chance this is incorrect since I presume addsToCart is on a per session basis
+  mutate(ATCR = addsToCart/sessions)
+#verifying the data frame is processed correctly
+month_ag_df
+
+#adding a column for a formal date object for ggplot visualizations
+month_ag_df$Date<-as.Date(with(month_ag_df,paste(year,month,1,sep="-")),"%Y-%m-%d")
+#plotting monthly sessions in the past year
+p1 <- ggplot(month_ag_df, aes(x=Date, y = sessions)) +
+  geom_line(colour = "#64bfbf", size = 1) + 
+  geom_point(colour = "#64bfbf", size = 2) +
+  scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
+  scale_y_continuous(limits = c(0, max(month_ag_df$sessions*1.1))) +
+  labs(x ="Date",
+       y ="Total Sessions", 
+       title ="") +
+  theme(plot.margin = margin(0,.5,0,0, "cm"))
+#plotting monthly quantity sold in the past year
+p2 <- ggplot(month_ag_df, aes(x=Date, y = quantity)) +
+  geom_line(colour = "#64bfbf", size = 1) + 
+  geom_point(colour = "#64bfbf", size = 2) +
+  scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
+  scale_y_continuous(limits = c(0, max(month_ag_df$quantity*1.1))) +
+  labs(x ="Date",
+       y ="Total Quantity Sold", 
+       title ="") +
+  theme(plot.margin = margin(0,.5,0,0, "cm"))
+#plotting monthly ECR in the past year
+p3 <- ggplot(month_ag_df, aes(x=Date, y = ECR)) +
+  geom_line(colour = "#64bfbf", size = 1) + 
+  geom_point(colour = "#64bfbf", size = 2) +
+  scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
+  scale_y_continuous(labels = scales::percent,
+                     limits = c(0, max(month_ag_df$ECR*1.1))) +
+  labs(x ="Date",
+       y ="ECR", 
+       title ="") +
+  theme(plot.margin = margin(0,.5,0,0, "cm"))
+#plotting monthly ATCR in the past year
+p4 <- ggplot(month_ag_df, aes(x=Date, y = ATCR)) +
+  geom_line(colour = "tomato", size = 1) + 
+  geom_point(colour = "tomato", size = 2) +
+  scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
+  scale_y_continuous(labels = scales::percent,
+                     limits = c(0, max(month_ag_df$ATCR*1.1))) +
+  labs(x ="Date",
+       y ="ATCR", 
+       title ="") +
+  theme(plot.margin = margin(0,.5,0,0, "cm"))
+#plotting all the visuals in a grid
+a <- grid.arrange(p1, p2, p3, p4, nrow = 2)
+
+#finalizing the second deliverable by switching the rows and columns of the data frame
+#and adding two additional columns for absolute and relative changes between the past
+#2 months
+two_month_ag_df <- month_ag_df %>%
+  #filtering the two most recent months
+  filter(month > 4 & month < 7) %>%
+  #removing unecessary columns
+  dplyr::select(-c(year, Date)) %>%
+  #reshaping the data to be in a longer format (besides month)
+  pivot_longer(cols = -month) %>%
+  #then widening the data and using month as the new columns
+  pivot_wider(names_from = month) %>%
+  #renaming columns with clearer names
+  rename("statistic" = 1, "5/2013" = 2, "6/2013" = 3) %>%
+  #mutating new columns for absolute and relative changes
+  mutate("absolute change" = cur_data()[['6/2013']] - cur_data()[['5/2013']]) %>%
+  mutate("relative change" = `absolute change`/`5/2013`) %>%
+  as.data.frame()
+#verifying the second deliverable is correctly formatted
+two_month_ag_df
+```
+
+```{r Write_Deliverables}
+#creating an Excel workbook object
+wb = createWorkbook()
+#adding two worksheets
+sheet1 = addWorksheet(wb, "Month*Device Aggregation")
+sheet2 = addWorksheet(wb, "2_Month_Comparison")
+#writing the deliverable data to the workbook
+writeData(wb, sheet1, device_ag_df)
+writeData(wb, sheet2, two_month_ag_df)
+#styling relative change as a percentage
+addStyle(wb, sheet2, style = createStyle(numFmt = "0%"), cols=5, rows=2:(nrow(month_ag_df)+1), gridExpand=TRUE)
+#set column widths so cells fit the data
+setColWidths(wb, sheet1, cols = 1:ncol(device_ag_df), widths = "auto")
+setColWidths(wb, sheet2, cols = 1:ncol(two_month_ag_df), widths = "auto")
+
+#writing the deliverable
+saveWorkbook(wb, "Deliverable.xlsx", overwrite = TRUE)
+```
+
+
+```{r ScratchWork}
+# ggplot(gather(session_df %>%
+#                 dplyr::select(-c(year, day, month)) %>%
+#                 dplyr::select(where(is.numeric))),
+#        aes(value)) + 
+#     geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.9, bins = 20) + 
+#     facet_wrap(~key, scales = 'free_x') +
+#     labs(title = "Session Counts Univariate Distributions")
+```
+
