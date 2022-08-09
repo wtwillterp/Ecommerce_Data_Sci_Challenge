@@ -2,21 +2,27 @@
 title: "IXIS Data Science Challenge"
 author: "William Terpstra"
 date: "2022-08-08"
-output: html_document
+output:
+  html_document:
+    df_print: paged
+  pdf_document:
+    latex_engine: xelatex
 ---
 
 ```{r setup, include=FALSE}
+#packages mentioned explicitly in guidance
 library(tidyverse)
 library(openxlsx)
-#maybe remove since it isn't explicitly mentioned in the guidance
+#used to quickly visualize variable's relationships
 library(GGally)
+#used to arrange plots together
 library(gridExtra)
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r Data_Loading}
 #set working directory & load data
-setwd("C:/Users/Will/Documents/IXIS_Test")
+setwd("C:/Users/Will/Documents/IXIS_Test/Ecommerce_Data_Sci_Challenge")
 #loading data
 adds_df <- read.csv("DataAnalyst_Ecom_data_addsToCart.csv")
 session_df <- read.csv("DataAnalyst_Ecom_data_sessionCounts.csv")
@@ -53,7 +59,7 @@ session_df %>% count(dim_browser) %>% arrange(desc(n)) %>% mutate(decile = ntile
 #lets just do a cut off at the top 25 browsers, and lump the rest into other
 session_df$dim_browser <- fct_lump_n(session_df$dim_browser, 25)
 #verifying it worked
-session_df%>% count(dim_browser) %>% arrange(desc(n))
+#session_df%>% count(dim_browser) %>% arrange(desc(n))
 
 #creating a function to check for NAs
 NAcheck <- function(df) {
@@ -133,14 +139,11 @@ daily_s_df %>% arrange(desc(transactions_total))
 #in terms of improving data collection or leveraged with additional data assets
 #to discover why prospective customers start but do not complete transactions
 
-daily_s_df %>% arrange(desc(qty_per_trans_total))
-
+#looking at mean, median, quantiles, max, min etc. of the variables
 summary(daily_s_df)
 
-ggplot(daily_s_df, aes(x = transactions_total, y = quantity_total)) +
-  geom_point(size=2, shape=1)
-
-device_month_df <- session_df %>%
+#visualizing all variable pairs
+session_df %>%
   #grouping by device and month so we can summarize each statistic
   group_by(dim_deviceCategory, month) %>%
   #removing year and day
@@ -149,10 +152,14 @@ device_month_df <- session_df %>%
   summarise_if(is.numeric, list(total = sum)) %>%
   #calculating ECR to look at that as well
   mutate(ECR_total = transactions_total/sessions_total) %>%
+  #also assessing quantity sold per transaction
   mutate(qty_per_trans_total = quantity_total/transactions_total) %>%
-  ungroup()
-
-device_month_df %>% ggpairs(aes(colour = dim_deviceCategory, alpha = 0.4))
+  ungroup() %>%
+  #removing month from the pairwise assessment
+  dplyr::select(-c(month)) %>%
+  #finally conducting a pairwise visualization
+  GGally::ggpairs(aes(colour = dim_deviceCategory, alpha = 0.4))
+#transactions and quantity sold are extremely correlated
 ```
 
 
@@ -167,6 +174,8 @@ device_ag_df <- session_df %>%
   mutate(ECR = transactions/sessions) %>%
   #mutating year just for clarification
   mutate(year = year + 2000) %>%
+  #capitalizing device names for plotting
+  mutate(dim_deviceCategory = str_to_title(dim_deviceCategory)) %>%
   dplyr::select(-c(day))
 #ungrouping
 device_ag_df <- device_ag_df %>% ungroup()
@@ -176,20 +185,27 @@ device_ag_df <- device_ag_df %>% arrange(dim_deviceCategory, year, month)
 #seems this part of the deliverable displays correctly
 device_ag_df
 
-device_ag_df %>% group_by(dim_deviceCategory) %>% 
+#creating a visualization of avg monthly session share by device
+p1 <- device_ag_df %>% group_by(dim_deviceCategory) %>% 
   dplyr::select(-c(month, year)) %>%
+  #calculating the monthly average
   summarize_if(is.numeric, list(monthly_avg = mean)) %>%
+  #calculating the percent of monthly average sessions each device accounts for
   mutate(prc_ses_m_avg = sessions_monthly_avg/sum(sessions_monthly_avg)) %>%
-  mutate(dim_deviceCategory = str_to_title(dim_deviceCategory)) %>%
+  #making a bar plot ordered by device share of avg monthly sessions
+  #which is the same as the share of total sessions, which is a
+  #much more intuitive framing for stakeholders
   ggplot(aes(reorder(dim_deviceCategory, prc_ses_m_avg),
              prc_ses_m_avg, fill=dim_deviceCategory)) +
   geom_col(show.legend = FALSE) +
   scale_y_continuous(labels = scales::percent, limits = c(0,1)) +
+  #assigning colors that correspond to each device, will be used consistently
   scale_fill_manual(values = c("Desktop" = "#F8766D",
                                "Mobile"="#7CAE00",
                                "Tablet"="#00BFC4",
                                "Total"="#C77CFF")) +
   coord_flip() +
+  #adding a label to the bar plot
   geom_text(size = 5,
             aes(label = scales::percent(round(prc_ses_m_avg, 3)),
                 y = prc_ses_m_avg),
@@ -197,7 +213,72 @@ device_ag_df %>% group_by(dim_deviceCategory) %>%
   labs(title = "Share of Sessions by Device", 
        x = "Device", 
        y = "Sessions")
+
+#this simply adds 12 new rows corresponding to the monthly
+#totals across all devices for each statistic
+device_ag_df <- rbind(device_ag_df, session_df %>% 
+  #using the group_by() and summarize() functions to calculate the totals of 
+  #numeric variables by device category and month
+  #I also include year for clarity about the past 12 month period being analyzed
+  group_by(year, month) %>%
+  dplyr::select(-c(day)) %>%
+  summarise_if(is.numeric, sum) %>%
+  #adding a column for the effective conversion rate
+  mutate(ECR = transactions/sessions) %>%
+  #mutating year just for clarification
+  mutate(year = year + 2000) %>%
+  mutate(dim_deviceCategory = "Total"))
+
+#adding a column for a formal date object for ggplot visualizations
+device_ag_df$Date<-as.Date(with(device_ag_df,paste(year,month,1,sep="-")),"%Y-%m-%d")
+
+#plotting monthly quantity by device
+p2 <- ggplot(device_ag_df, aes(x=Date, y = quantity, color = dim_deviceCategory)) +
+  geom_line(size = 1) + 
+  geom_point(size = 2) +
+  scale_fill_manual(values = c("Desktop" = "#F8766D",
+                               "Mobile"="#7CAE00",
+                               "Tablet"="#00BFC4",
+                               "Total"="#C77CFF")) +
+  scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
+  scale_y_continuous(limits = c(0, max(device_ag_df$quantity*1.1))) +
+  labs(x ="Date",
+       y ="Quantity", 
+       title ="Monthly Quantity Sold") +
+  theme(plot.margin = margin(0,.5,0,0, "cm"), 
+        legend.position="none")
+
+#plotting monthly ECR by device
+p3 <- device_ag_df %>% rename(Device = dim_deviceCategory) %>%
+  ggplot( aes(x=Date, y = ECR, color = Device)) +
+  geom_line(size = 1) + 
+  geom_point(size = 2) +
+  scale_fill_manual(values = c("Desktop" = "#F8766D",
+                               "Mobile"="#7CAE00",
+                               "Tablet"="#00BFC4",
+                               "Total"="#C77CFF")) +
+  scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
+  scale_y_continuous(labels = scales::percent, limits = c(0, max(device_ag_df$ECR*1.1))) +
+  labs(x ="Date",
+       y ="ECR", 
+       title ="Monthly ECR") +
+  theme(plot.margin = margin(0,.5,0,0, "cm"))
+
+lay <- rbind(c(1,1,2,2,2),
+             c(1,1,2,2,2),
+             c(3,3,3,3,3))
+grid.arrange(p2, p3, p1, layout_matrix = lay)
+
+#plotting all the visuals in a grid
+multiplot <- grid.arrange(p3, p2, p1, heights = c(1,1,1))
+
+#removing date column to reduce redundancy in the final deliverable, 
+#could remove month and year columns instead
+device_ag_df <- device_ag_df %>% dplyr::select(-c(Date)) %>% 
+  #removing the rows for totals across all devices
+  filter(dim_deviceCategory != "Total")
 ```
+
 ```{r Data_Aggregation_by_month}
 #creating the second deliverable
 
@@ -226,10 +307,11 @@ month_ag_df
 
 #adding a column for a formal date object for ggplot visualizations
 month_ag_df$Date<-as.Date(with(month_ag_df,paste(year,month,1,sep="-")),"%Y-%m-%d")
+
 #plotting monthly sessions in the past year
 p1 <- ggplot(month_ag_df, aes(x=Date, y = sessions)) +
-  geom_line(colour = "#64bfbf", size = 1) + 
-  geom_point(colour = "#64bfbf", size = 2) +
+  geom_line(colour = "black", size = 1) + 
+  geom_point(colour = "black", size = 2) +
   scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
   scale_y_continuous(limits = c(0, max(month_ag_df$sessions*1.1))) +
   labs(x ="Date",
@@ -238,8 +320,8 @@ p1 <- ggplot(month_ag_df, aes(x=Date, y = sessions)) +
   theme(plot.margin = margin(0,.5,0,0, "cm"))
 #plotting monthly quantity sold in the past year
 p2 <- ggplot(month_ag_df, aes(x=Date, y = quantity)) +
-  geom_line(colour = "#64bfbf", size = 1) + 
-  geom_point(colour = "#64bfbf", size = 2) +
+  geom_line(colour = "black", size = 1) + 
+  geom_point(colour = "black", size = 2) +
   scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
   scale_y_continuous(limits = c(0, max(month_ag_df$quantity*1.1))) +
   labs(x ="Date",
@@ -248,8 +330,8 @@ p2 <- ggplot(month_ag_df, aes(x=Date, y = quantity)) +
   theme(plot.margin = margin(0,.5,0,0, "cm"))
 #plotting monthly ECR in the past year
 p3 <- ggplot(month_ag_df, aes(x=Date, y = ECR)) +
-  geom_line(colour = "#64bfbf", size = 1) + 
-  geom_point(colour = "#64bfbf", size = 2) +
+  geom_line(colour = "black", size = 1) + 
+  geom_point(colour = "black", size = 2) +
   scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
   scale_y_continuous(labels = scales::percent,
                      limits = c(0, max(month_ag_df$ECR*1.1))) +
@@ -259,8 +341,8 @@ p3 <- ggplot(month_ag_df, aes(x=Date, y = ECR)) +
   theme(plot.margin = margin(0,.5,0,0, "cm"))
 #plotting monthly ATCR in the past year
 p4 <- ggplot(month_ag_df, aes(x=Date, y = ATCR)) +
-  geom_line(colour = "tomato", size = 1) + 
-  geom_point(colour = "tomato", size = 2) +
+  geom_line(colour = "red", size = 1) + 
+  geom_point(colour = "red", size = 2) +
   scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
   scale_y_continuous(labels = scales::percent,
                      limits = c(0, max(month_ag_df$ATCR*1.1))) +
@@ -268,8 +350,9 @@ p4 <- ggplot(month_ag_df, aes(x=Date, y = ATCR)) +
        y ="ATCR", 
        title ="") +
   theme(plot.margin = margin(0,.5,0,0, "cm"))
+
 #plotting all the visuals in a grid
-a <- grid.arrange(p1, p2, p3, p4, nrow = 2)
+multiplot <- grid.arrange(p1, p2, p3, p4, nrow = 2)
 
 #finalizing the second deliverable by switching the rows and columns of the data frame
 #and adding two additional columns for absolute and relative changes between the past
@@ -277,7 +360,7 @@ a <- grid.arrange(p1, p2, p3, p4, nrow = 2)
 two_month_ag_df <- month_ag_df %>%
   #filtering the two most recent months
   filter(month > 4 & month < 7) %>%
-  #removing unecessary columns
+  #removing unnecessary columns
   dplyr::select(-c(year, Date)) %>%
   #reshaping the data to be in a longer format (besides month)
   pivot_longer(cols = -month) %>%
@@ -310,16 +393,5 @@ setColWidths(wb, sheet2, cols = 1:ncol(two_month_ag_df), widths = "auto")
 
 #writing the deliverable
 saveWorkbook(wb, "Deliverable.xlsx", overwrite = TRUE)
-```
-
-
-```{r ScratchWork}
-# ggplot(gather(session_df %>%
-#                 dplyr::select(-c(year, day, month)) %>%
-#                 dplyr::select(where(is.numeric))),
-#        aes(value)) + 
-#     geom_histogram(fill="#69b3a2", color="#e9ecef", alpha=0.9, bins = 20) + 
-#     facet_wrap(~key, scales = 'free_x') +
-#     labs(title = "Session Counts Univariate Distributions")
 ```
 
