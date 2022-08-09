@@ -3,10 +3,10 @@ title: "IXIS Data Science Challenge"
 author: "William Terpstra"
 date: "2022-08-08"
 output:
-  html_document:
-    df_print: paged
   pdf_document:
     latex_engine: xelatex
+  html_document:
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
@@ -268,9 +268,6 @@ lay <- rbind(c(1,1,2,2,2),
              c(1,1,2,2,2),
              c(3,3,3,3,3))
 grid.arrange(p2, p3, p1, layout_matrix = lay)
-
-#plotting all the visuals in a grid
-multiplot <- grid.arrange(p3, p2, p1, heights = c(1,1,1))
 
 #removing date column to reduce redundancy in the final deliverable, 
 #could remove month and year columns instead
