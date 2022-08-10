@@ -40,7 +40,7 @@ str(session_df)
 session_df <- session_df %>% 
   #separating the date column into month, date, and year
   separate(dim_date, c("month","day","year"), "/", convert = TRUE)
-#while we are at it, lets rename QTY to follow the naming convetions of other vairables
+#while we are at it, lets rename QTY to follow the naming conventions of other variables
 session_df <- session_df %>% rename(quantity = QTY)
 #next dim_browser and dim_deviceCategory should be factors
 session_df$dim_browser <- as.factor(session_df$dim_browser)
@@ -148,7 +148,7 @@ session_df %>%
   group_by(dim_deviceCategory, month) %>%
   #removing year and day
   dplyr::select(-c(year, day)) %>%
-  #summarizing the daily average and standard deviation for each statistic
+  #summarizing the monthly total of each statistic
   summarise_if(is.numeric, list(total = sum)) %>%
   #calculating ECR to look at that as well
   mutate(ECR_total = transactions_total/sessions_total) %>%
@@ -177,7 +177,7 @@ device_ag_df <- session_df %>%
   #capitalizing device names for plotting
   mutate(dim_deviceCategory = str_to_title(dim_deviceCategory)) %>%
   dplyr::select(-c(day))
-#ungrouping
+#ungrouping just to make sure this doesn't interfere with functions in the future
 device_ag_df <- device_ag_df %>% ungroup()
 
 #arranging the data for intuitive display
@@ -198,14 +198,17 @@ p1 <- device_ag_df %>% group_by(dim_deviceCategory) %>%
   ggplot(aes(reorder(dim_deviceCategory, prc_ses_m_avg),
              prc_ses_m_avg, fill=dim_deviceCategory)) +
   geom_col(show.legend = FALSE) +
-  scale_y_continuous(labels = scales::percent, limits = c(0,1)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0,1),
+                     #this removes empty space between the labels and bar plot
+                     expand=c(0,0)) +
   #assigning colors that correspond to each device, will be used consistently
   scale_fill_manual(values = c("Desktop" = "#F8766D",
                                "Mobile"="#7CAE00",
                                "Tablet"="#00BFC4",
                                "Total"="#C77CFF")) +
+  #horizontal bar plots are easier to read generally
   coord_flip() +
-  #adding a label to the bar plot
+  #adding percentage labels to the bar plot
   geom_text(size = 5,
             aes(label = scales::percent(round(prc_ses_m_avg, 3)),
                 y = prc_ses_m_avg),
@@ -245,6 +248,7 @@ p2 <- ggplot(device_ag_df, aes(x=Date, y = quantity, color = dim_deviceCategory)
   labs(x ="Date",
        y ="Quantity", 
        title ="Monthly Quantity Sold") +
+  #this fixes an axis label being cut off
   theme(plot.margin = margin(0,.5,0,0, "cm"), 
         legend.position="none")
 
@@ -258,15 +262,20 @@ p3 <- device_ag_df %>% rename(Device = dim_deviceCategory) %>%
                                "Tablet"="#00BFC4",
                                "Total"="#C77CFF")) +
   scale_x_date(date_labels= "%Y-%m", date_breaks = "3 months") +
-  scale_y_continuous(labels = scales::percent, limits = c(0, max(device_ag_df$ECR*1.1))) +
+  #making sure the scale is a percentage
+  scale_y_continuous(labels = scales::percent, 
+                     limits = c(0, max(device_ag_df$ECR*1.1))) +
   labs(x ="Date",
        y ="ECR", 
        title ="Monthly ECR") +
   theme(plot.margin = margin(0,.5,0,0, "cm"))
 
+#creating a layout matrix, which tells grid.arrange
+#how space should be allocated among plots
 lay <- rbind(c(1,1,2,2,2),
              c(1,1,2,2,2),
-             c(3,3,3,3,3))
+             c(3,3,3,3,4))
+#outputting the 3 plots visualizing device data together
 grid.arrange(p2, p3, p1, layout_matrix = lay)
 
 #removing date column to reduce redundancy in the final deliverable, 
@@ -290,7 +299,7 @@ month_ag_df <- session_df %>%
   mutate(ECR = transactions/sessions) %>%
   #mutating year just for clarification
   mutate(year = year + 2000)
-#ungrouping
+#ungrouping just to make sure this doesn't interfere with functions in the future
 month_ag_df <- month_ag_df %>% ungroup()
 
 #now adding addsToCart and ATCR
